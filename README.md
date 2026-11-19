@@ -26,7 +26,9 @@ no plotting-library argument. Since Python modules have separate namespaces,
 ## VS Code
 
 1. Install the Python and Jupyter extensions.
-2. Open this folder and `Lorentz transformation.ipynb`.
+2. Open this folder and `Lorentz transformation.ipynb`. If your local Python
+   environment has no notebook kernel, install one with
+   `python -m pip install ipykernel`.
 3. Select a Python kernel, run the notebook's installation cell once, and restart
    the kernel if prompted. Continue with the diagram cell.
 
@@ -38,11 +40,35 @@ to the installation cell; use the same Python environment as the notebook kernel
 ## Google Colab
 
 1. Upload `Lorentz transformation.ipynb` using **File > Upload notebook**.
-2. Run the installation cell.
-3. Run the upload cell and select `mathstudio.py` and `spacetime.py` from this
-   folder. They must be uploaded again after Colab deletes or resets the runtime.
-4. Run the diagram cell. The plot uses Colab's normal Plotly renderer inside
-   a built-in Jupyter output widget.
+2. Run this setup cell to install the plotting dependencies and download the
+   modules from GitHub:
+
+   ```python
+   %pip install -q -r https://raw.githubusercontent.com/100mw/mathstudio/main/requirements.txt
+
+   !wget -q -O mathstudio.py https://raw.githubusercontent.com/100mw/mathstudio/main/mathstudio.py
+   !wget -q -O spacetime.py https://raw.githubusercontent.com/100mw/mathstudio/main/spacetime.py
+   ```
+
+3. Run the diagram cell:
+
+   ```python
+   import mathstudio
+   from spacetime import SpacetimeDiagram
+
+   diagram = SpacetimeDiagram()
+   ```
+
+Rerun the setup cell whenever Colab starts a new runtime. The plot uses Colab's
+normal Plotly renderer inside a built-in Jupyter output widget.
+
+Colab provides its own notebook kernel. Do not install or upgrade `ipykernel`
+or `jupyter-client` in the setup cell. An earlier version of `requirements.txt`
+required `ipykernel>=6.29`, which conflicted with Colab's pinned kernel and could
+also upgrade `jupyter-client` incompatibly. If you already ran that version,
+save any files you need from the runtime, select **Runtime > Disconnect and
+delete runtime**, reconnect, and run the setup cell above. A normal session
+restart does not undo package installations.
 
 ## Coordinates and colors
 
