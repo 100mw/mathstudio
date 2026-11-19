@@ -22,8 +22,8 @@ def SpacetimeDiagram(*, length=0, time=0, v=0, grid=True,
     The initial window matches the PDF; events may move outside it.
     The diagram uses Plotly's SVG traces with live sliders and zoom/pan controls.
     """
-    length = Slider('length', 0, 6, 0.2, length)
-    time = Slider('time', 0, 6, 0.2, time)
+    length = Slider('length', 0, 6, 0.125, length)
+    time = Slider('time', 0, 6, 0.125, time)
     v = Slider('v', 0, 0.99, 0.01, v)
 
     # Inverse Lorentz transformation: primed event -> unprimed diagram.
