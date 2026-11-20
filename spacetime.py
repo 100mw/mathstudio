@@ -86,7 +86,8 @@ def SpacetimeDiagram(*, length=0, time=0, v=0, grid=True,
         ListPlot([X(length, time)], [T(length, time)],
                  color='cyan', points=10, name='transformed event')
 
-        # Short tick marks perpendicular to each axis, including moving axes.
+        # Moving-axis ticks run parallel to the other moving axis, following
+        # the transformed coordinate grid. Keep their visible length constant.
         def tick(x, y, dx, dy, color='white'):
             ListPlot([x - dx, x + dx], [y - dy, y + dy],
                      color=color, points=0, lines=True, line_width=1.5)
@@ -96,8 +97,8 @@ def SpacetimeDiagram(*, length=0, time=0, v=0, grid=True,
         for i in range(1, 7):
             tick(i, 0, 0, tick_half, color='gray')
             tick(0, i, tick_half, 0, color='gray')
-            tick(X(i, 0), T(i, 0), -v*moving_tick_half, moving_tick_half)
-            tick(X(0, i), T(0, i), moving_tick_half, -v*moving_tick_half)
+            tick(X(i, 0), T(i, 0), v*moving_tick_half, moving_tick_half)
+            tick(X(0, i), T(0, i), moving_tick_half, v*moving_tick_half)
 
         # Place home-frame labels beside the primed labels at rest, with a
         # slight offset along each axis so the labels do not overlap at v=0.
