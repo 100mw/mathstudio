@@ -1,6 +1,6 @@
 # Week 12: Lorentz transformation
 
-Open `Lorentz transformation.ipynb` in VS Code or upload it to Google Colab.
+Open `Week11.ipynb` in VS Code or upload it to Google Colab.
 Students need only these commands after setup:
 
 ```python
@@ -14,32 +14,21 @@ The black plot uses SVG graphics with continuously updating `length`, `time`,
 and `v` sliders, plus Plotly's zoom and pan controls. Keep the notebook kernel
 running while using the sliders. Hyperbolas are sampled directly from their
 equations, and straight lines use just their two endpoints to keep slider updates
-small while retaining SVG graphics. The plotting and widget
-implementation stays in `mathstudio.py`; the mathematical construction is in
-`spacetime.py`. The student script imports `mathstudio` explicitly to make the
-plotting library visible. `SpacetimeDiagram` always uses MathStudio and takes
-no plotting-library argument. Since Python modules have separate namespaces,
-`spacetime.py` also imports the MathStudio commands it uses.
-`lorentz_transformation.py` is a minimal launch script for
-`%run lorentz_transformation.py` in a notebook cell.
+small while retaining SVG graphics. The plotting and widget implementation
+is in `mathstudio.py`. The mathematical construction is in `spacetime.py`.
 
 ## VS Code
 
 1. Install the Python and Jupyter extensions.
-2. Open this folder and `Lorentz transformation.ipynb`. If your local Python
-   environment has no notebook kernel, install one with
-   `python -m pip install ipykernel`.
-3. Select a Python kernel, run the notebook's installation cell once, and restart
-   the kernel if prompted. Continue with the diagram cell.
-
-Use the notebook editor or a Jupyter Interactive Window for sliders. Running
-`python lorentz_transformation.py` in a terminal does not provide a widget host.
-The terminal command `python -m pip install -r requirements.txt` is an alternative
-to the installation cell; use the same Python environment as the notebook kernel.
+2. In your notebook's Python environment, run
+   `python -m pip install -r requirements.txt`. Install `ipykernel` if that
+   environment needs a notebook kernel.
+3. Open this folder and `Week11.ipynb`, select that Python kernel, and run the
+   diagram cell.
 
 ## Google Colab
 
-1. Upload `Lorentz transformation.ipynb` using **File > Upload notebook**.
+1. Upload `Week11.ipynb` using **File > Upload notebook**.
 2. Run this setup cell to install the plotting dependencies and download the
    modules from GitHub:
 
@@ -62,13 +51,7 @@ to the installation cell; use the same Python environment as the notebook kernel
 Rerun the setup cell whenever Colab starts a new runtime. The plot uses Colab's
 normal Plotly renderer inside a built-in Jupyter output widget.
 
-Colab provides its own notebook kernel. Do not install or upgrade `ipykernel`
-or `jupyter-client` in the setup cell. An earlier version of `requirements.txt`
-required `ipykernel>=6.29`, which conflicted with Colab's pinned kernel and could
-also upgrade `jupyter-client` incompatibly. If you already ran that version,
-save any files you need from the runtime, select **Runtime > Disconnect and
-delete runtime**, reconnect, and run the setup cell above. A normal session
-restart does not undo package installations.
+Colab manages its own `ipykernel` and `jupyter-client` versions.
 
 ## Coordinates and colors
 
@@ -111,9 +94,6 @@ diagram = SpacetimeDiagram(grid=False)  # Hide both sets of gridlines.
 
 ## Write mathematical plots
 
-The optional notebook section shows a short construction using only equations
-and plotting commands. The full PDF translation is in `spacetime.py`.
-
 ```python
 from mathstudio import *
 
@@ -122,37 +102,23 @@ gamma = 1 / sqrt(1 - v**2)
 
 with Plot(x=(-0.5, 6.25), y=(-0.5, 6.25), xlabel='x', ylabel='ct'):
     ImplicitPlot(x**2 - y**2 - 1)  # Plot expression = 0.
-    ParametricPlot(gamma*u, gamma*v*u, variable=u, t=(0, 7), color='green')
-    ParametricPlot(gamma*v*t, gamma*t, t=(0, 7), color='blue')
+    ParametricPlot(gamma*u, gamma*v*u, interval=(0, 7), color='green')
+    ParametricPlot(gamma*v*u, gamma*u, interval=(0, 7), color='blue')
 ```
 
 - Use `**` for powers, `#` for comments, and `range(1, 7)` for integers 1 through 6.
 - `ImplicitPlot(Eq(x**2 - y**2, 1))` is equivalent to plotting the expression
   `x**2 - y**2 - 1`. Use `Eq`, since Python's `==` tests equality immediately.
 - `ListPlot([x1, x2], [y1, y2])` plots points; expressions may contain sliders.
-- `ParametricPlot` accepts `line_width`, `dash`, and `name`. Its `t` interval may
-  contain sliders, such as `t=(0, length)`. Use `variable=u` to select a parameter.
-  Straight lines can use `samples=2`; curves default to 600 samples.
+- `ParametricPlot` accepts `line_width`, `dash`, and `name`. The curve parameter
+  defaults to `u`. Pass `variable=t` to use `t` as the parameter symbol. The
+  interval defaults to `(0, 2*pi)` and may contain sliders, as in
+  `interval=(0, length)`. Straight lines can use `samples=2`.
+  Curves default to 600 samples.
 - Every command in one `with Plot(...)` block shares axes and sliders. Outside a
-  block, `ParametricPlot` still displays a standalone plot, as in the prior lab.
+  block, `ParametricPlot` displays a standalone plot.
 - `SpacetimeDiagram(show=False)` builds without displaying. Its `.figure` and
   `.sliders` expose the live objects; `.at(v=0.6, length=2, time=1)` makes a static
   Plotly snapshot using initial values for omitted sliders.
 - HTML exported from a static snapshot has no Python slider callbacks. Use the
   notebook for the live diagram.
-
-## Instructor checks
-
-From this folder, after installing the requirements:
-
-```bash
-python -m unittest discover -s tests -v
-```
-
-Tests check the lab geometry, Lorentz invariant, collapsed pencil at length zero,
-slider callbacks, symbolic parameter bounds, and the earlier Lissajous example.
-Plots use a regular Plotly Figure inside an `ipywidgets.Output`, as in the earlier
-Lissajous lab. Slider changes redraw the SVG plot through the notebook's Plotly
-renderer, without FigureWidget or anywidget. If you previously loaded the
-FigureWidget version, restart the kernel and rerun the notebook to load the
-updated scripts.

@@ -4,8 +4,10 @@ Requires numpy, sympy, plotly, and ipywidgets. Combine commands
 inside ``with Plot(...)`` to share axes and live sliders.
 """
 import math
+from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass
+from functools import partial
 
 import numpy as np
 import sympy as sp
@@ -23,10 +25,11 @@ exp, log, sqrt, Abs = sp.exp, sp.log, sp.sqrt, sp.Abs
 pi, E, symbols = sp.pi, sp.E, sp.symbols
 Eq = sp.Eq
 x, y, t, u = sp.symbols('x y t u', real=True)
+_DEFAULT_AXES = x, y
+
 
 @dataclass(frozen=True)
 class _SliderSpec:
-    name: str
     minimum: float
     maximum: float
     step: float
@@ -98,17 +101,16 @@ def Slider(name, minimum, maximum, step, value=None):
     """Register a slider and return a SymPy symbol for use in formulas."""
     if not isinstance(name, str) or not name.isidentifier():
         raise ValueError('Slider name must be a valid Python identifier')
-    low, high, increment = map(lambda z: float(sp.N(z)), (minimum, maximum, step))
+    low, high, increment = map(float, (minimum, maximum, step))
     if not all(map(math.isfinite, (low, high, increment))):
         raise ValueError('Slider bounds and step must be finite')
     if high <= low or increment <= 0:
         raise ValueError('Slider requires minimum < maximum and step > 0')
-    initial = low if value is None else float(sp.N(value))
+    initial = low if value is None else float(value)
     if not math.isfinite(initial) or not low <= initial <= high:
         raise ValueError('Initial slider value must be within the bounds')
-    sym = sp.Symbol(name, real=True)
-    _sliders[name] = _SliderSpec(name, low, high, increment, initial)
-    return sym
+    _sliders[name] = _SliderSpec(low, high, increment, initial)
+    return sp.Symbol(name, real=True)
 
 
 def _interval(value, label, symbolic=False):
@@ -126,32 +128,31 @@ def _interval(value, label, symbolic=False):
 
 
 def _parameters(free):
-    params = sorted(free, key=str)
-    missing = [str(s) for s in params if str(s) not in _sliders]
+    params = tuple(sorted(free, key=str))
+    missing = [str(symbol) for symbol in params if str(symbol) not in _sliders]
     if missing:
         raise ValueError('Undeclared slider(s): ' + ', '.join(missing))
     return params
 
 
 def _array(value, shape):
-    a = np.broadcast_to(np.asarray(value, dtype=float), shape)
-    return np.where(np.isfinite(a), a, np.nan)
+    array = np.asarray(value, dtype=float)
+    return np.broadcast_to(np.where(np.isfinite(array), array, np.nan), shape)
 
 
 @dataclass
 class _Layer:
-    trace: object
-    evaluate: object
-    parameters: list
-    cached: object = None
+    trace: dict
+    evaluate: Callable
+    parameters: tuple[sp.Symbol, ...]
+    _static_data: dict | None = None
 
     def data(self, values):
-        # Static layers are computed only once.
         if self.parameters:
-            return self.evaluate(values)
-        if self.cached is None:
-            self.cached = self.evaluate({})
-        return self.cached
+            return self.evaluate(*(values[str(symbol)] for symbol in self.parameters))
+        if self._static_data is None:
+            self._static_data = self.evaluate()
+        return self._static_data
 
 
 class Plot:
@@ -160,7 +161,7 @@ class Plot:
     Example::
 
         with Plot(x=(-1, 7), y=(-1, 7)) as diagram:
-            ParametricPlot(t, t, t=(0, 7))
+            ParametricPlot(u, u, interval=(0, 7))
             ImplicitPlot(x**2 - y**2 - 1)
 
     ``diagram.figure`` is the live figure; ``diagram.sliders`` holds controls.
@@ -177,8 +178,20 @@ class Plot:
         self.figure, self.result, self.sliders = None, None, {}
         self._displayed = False
         self._show = show
+        axis_theme = dict(
+            automargin=True, linecolor='#506784', ticks='',
+            title=dict(standoff=15), zerolinewidth=2,
+        )
         self.layout = dict(
-            title=title, width=width, height=height, template='plotly_dark',
+            title=title, width=width, height=height,
+            template=dict(
+                layout=dict(
+                    autotypenumbers='strict', hovermode='closest',
+                    hoverlabel=dict(align='left'), title=dict(x=0.05),
+                    xaxis=axis_theme, yaxis=axis_theme,
+                ),
+                data=dict(scatter=[dict(marker=dict(line=dict(color='#283442')))]),
+            ),
             paper_bgcolor='#000000', plot_bgcolor='#000000',
             font=dict(color='#eeeeee'), showlegend=legend,
             uirevision='mathstudio',
@@ -223,60 +236,16 @@ class Plot:
             if not math.isfinite(value) or not spec.minimum <= value <= spec.maximum:
                 raise ValueError(f'{name} must be between {spec.minimum} and {spec.maximum}')
             current[name] = value
-        fig = go.Figure(layout=self.layout)
-        for layer in self.layers:
-            trace = layer.trace.to_plotly_json()
-            trace.update(layer.data(current))
-            fig.add_trace(trace)
-        return fig
+        return go.Figure(
+            data=[layer.trace | layer.data(current) for layer in self.layers],
+            layout=self.layout,
+        )
 
     def display(self, *, show=True):
         """Build the live display. Notebook widgets need a running Python kernel."""
         if self.result is None:
-            base = self.at()
-            if not self.parameters:
-                self.figure = self.result = base
-            else:
-                try:
-                    import ipywidgets as widgets
-                except ImportError as exc:
-                    raise ImportError(
-                        'Live sliders need ipywidgets. Run '
-                        '%pip install -r requirements.txt, then restart the kernel.'
-                    ) from exc
-                self.figure = base
-                self.output = widgets.Output(layout=widgets.Layout(
-                    margin='0', padding='0', border='0', width='100%',
-                ))
-                for name, spec in self.parameters.items():
-                    self.sliders[name] = widgets.FloatSlider(
-                        value=spec.initial, min=spec.minimum, max=spec.maximum,
-                        step=spec.step, description=name, continuous_update=True,
-                        readout_format='.3g', style={'description_width': '70px'},
-                        layout=widgets.Layout(width='95%'),
-                    )
-
-                def update(change):
-                    values = {name: control.value for name, control in self.sliders.items()}
-                    changed = change['owner'].description
-                    # Reuse static layers; update only slider-dependent traces.
-                    with self.figure.batch_update():
-                        for trace, layer in zip(self.figure.data, self.layers):
-                            if any(str(s) == changed for s in layer.parameters):
-                                trace.update(layer.data(values))
-                    if self._displayed:
-                        self._redraw()
-
-                for control in self.sliders.values():
-                    control.observe(update, names='value')
-                stylesheet = widgets.HTML(value=_DARK_PANEL_CSS,
-                                          layout=widgets.Layout(display='none'))
-                self.result = widgets.VBox(
-                    [stylesheet, *self.sliders.values(), self.output],
-                    layout=widgets.Layout(margin='0', padding='0', border='0',
-                                          width='100%', overflow='auto'),
-                )
-                self.result.add_class('mathstudio-dark')
+            self.figure = self.at()
+            self.result = self._build_widgets() if self.parameters else self.figure
         if show:
             if self.parameters:
                 from IPython.display import display
@@ -287,66 +256,113 @@ class Plot:
                 self.figure.show()
         return self.result
 
+    def _build_widgets(self):
+        import ipywidgets as widgets
+
+        self.output = widgets.Output(layout=widgets.Layout(
+            margin='0', padding='0', border='0', width='100%',
+        ))
+        updates = {name: [] for name in self.parameters}
+        for trace, layer in zip(self.figure.data, self.layers):
+            for symbol in layer.parameters:
+                updates[str(symbol)].append((trace, layer))
+
+        def update(changed, _change):
+            values = {name: control.value for name, control in self.sliders.items()}
+            changes = [(trace, layer.data(values)) for trace, layer in updates[changed]]
+            for trace, data in changes:
+                for key, value in data.items():
+                    trace[key] = value
+            if self._displayed:
+                self._redraw()
+
+        for name, spec in self.parameters.items():
+            control = widgets.FloatSlider(
+                value=spec.initial, min=spec.minimum, max=spec.maximum,
+                step=spec.step, description=name, continuous_update=True,
+                readout_format='.3g', style={'description_width': '70px'},
+                layout=widgets.Layout(width='95%'),
+            )
+            control.observe(partial(update, name), names='value')
+            self.sliders[name] = control
+
+        stylesheet = widgets.HTML(value=_DARK_PANEL_CSS,
+                                  layout=widgets.Layout(display='none'))
+        panel = widgets.VBox(
+            [stylesheet, *self.sliders.values(), self.output],
+            layout=widgets.Layout(margin='0', padding='0', border='0',
+                                  width='100%', overflow='auto'),
+        )
+        panel.add_class('mathstudio-dark')
+        return panel
+
     def _redraw(self):
-        # Use the notebook's Plotly renderer, as in the earlier lab. FigureWidget
-        # needs extra JavaScript modules that some notebook hosts cannot load.
+        # The notebook's Plotly renderer also works inside Colab's output widget.
         from IPython.display import clear_output
         with self.output:
             clear_output(wait=True)
             self.figure.show()
 
-def _submit(layer, *, title=None, width=750, height=550, show=True):
+
+def _submit(layer, *, show=True, **plot_options):
     plot = _active_plot.get()
     if plot is not None:
         plot._add(layer)
         return layer
-    plot = Plot(title=title, width=width, height=height)
+    plot = Plot(**plot_options)
     plot._add(layer)
     return plot.display(show=show)
 
 
-def ParametricPlot(x, y, *, t=(0, 2 * pi), variable=None, samples=600,
+def ParametricPlot(x, y, *, interval=(0, 2 * pi), variable=u, samples=600,
                    title=None, color='#2563eb', width=750, height=550,
                    line_width=3, dash=None, name=None, show=True):
     """Plot (x, y) formulas, with sliders for their registered parameters.
 
-    ``t=(start, end)`` can contain sliders, e.g. ``t=(0, length)``.
-    ``variable`` defaults to t (or u when only u occurs). Inside a Plot
-    block this adds a layer; outside it returns a figure or slider VBox.
+    ``interval=(start, end)`` can contain sliders, e.g. ``interval=(0, length)``.
+    ``variable`` defaults to the symbol u. Pass ``variable=t`` to use t.
+    Outside a Plot block this returns a figure or slider VBox.
     Use ``samples=2`` for straight lines; curved plots default to 600 points.
     """
     x, y = sp.sympify(x), sp.sympify(y)
-    free = x.free_symbols | y.free_symbols
-    if variable is None:
-        variable = globals()['u'] if globals()['u'] in free and globals()['t'] not in free else globals()['t']
-    elif isinstance(variable, str):
-        variable = next((s for s in free if str(s) == variable), sp.Symbol(variable, real=True))
     if not isinstance(variable, sp.Symbol):
-        raise ValueError('variable must be a symbol or its name')
-    bounds = _interval(t, 't', symbolic=True)
-    if any(variable in v.free_symbols for v in bounds):
+        raise ValueError('variable must be a SymPy symbol')
+    bounds = _interval(interval, 'interval', symbolic=True)
+    bound_symbols = bounds[0].free_symbols | bounds[1].free_symbols
+    if variable in bound_symbols:
         raise ValueError('Parameter bounds cannot depend on the curve variable')
     if not isinstance(samples, int) or not 2 <= samples <= 10000:
         raise ValueError('samples must be an integer between 2 and 10000')
-    params = _parameters((free | set().union(*(v.free_symbols for v in bounds))) - {variable})
-    fx, fy = [sp.lambdify([variable, *params], expr, modules='numpy') for expr in (x, y)]
-    fb = sp.lambdify(params, bounds, modules='numpy')
+    params = _parameters((x.free_symbols | y.free_symbols | bound_symbols) - {variable})
+    coords = sp.lambdify((variable, *params), (x, y), 'numpy', docstring_limit=0)
 
-    def evaluate(values):
-        args = [values[str(p)] for p in params]
-        low, high = map(float, fb(*args))
-        # A zero-length pencil is a valid curve collapsed to one point.
-        if not all(map(math.isfinite, (low, high))) or low > high:
-            raise ValueError('The parameter interval must be finite and nondecreasing')
-        grid = np.linspace(low, high, samples)
+    def sample(low, high):
+        return np.array([low, high]) if samples == 2 else np.linspace(low, high, samples)
+
+    if bound_symbols:
+        ends = sp.lambdify(params, bounds, 'numpy', docstring_limit=0)
+    else:
+        fixed_grid = sample(*map(float, bounds))
+
+    def evaluate(*args):
+        if bound_symbols:
+            low, high = map(float, ends(*args))
+            # Slider-dependent bounds can coincide, as for a zero-length pencil.
+            if not all(map(math.isfinite, (low, high))) or low > high:
+                raise ValueError('The parameter interval must be finite and nondecreasing')
+            grid = sample(low, high)
+        else:
+            grid = fixed_grid
         with np.errstate(all='ignore'):
-            px = _array(fx(grid, *args), grid.shape)
-            py = _array(fy(grid, *args), grid.shape)
+            px, py = (
+                np.broadcast_to(np.asarray(value, dtype=float), grid.shape)
+                for value in coords(grid, *args)
+            )
         valid = np.isfinite(px) & np.isfinite(py)
         return dict(x=np.where(valid, px, np.nan), y=np.where(valid, py, np.nan))
 
-    trace = go.Scatter(mode='lines', line=dict(color=color, width=line_width, dash=dash),
-                       name=name, showlegend=name is not None)
+    trace = dict(type='scatter', mode='lines', name=name, showlegend=name is not None,
+                 line=dict(color=color, width=line_width, dash=dash))
     return _submit(_Layer(trace, evaluate, params), title=title, width=width, height=height, show=show)
 
 
@@ -362,52 +378,55 @@ def ImplicitPlot(expression, *, x=None, y=None, variables=None, samples=220,
     expression = sp.sympify(expression)
     if isinstance(expression, sp.Equality):
         expression = expression.lhs - expression.rhs
-    vx, vy = variables if variables is not None else (globals()['x'], globals()['y'])
+    vx, vy = _DEFAULT_AXES if variables is None else variables
     plot = _active_plot.get()
-    xb = x if x is not None else (plot.xrange if plot is not None and plot.xrange is not None else (-6, 6))
-    yb = y if y is not None else (plot.yrange if plot is not None and plot.yrange is not None else (-6, 6))
-    xb, yb = _interval(xb, 'x'), _interval(yb, 'y')
+    if plot is not None:
+        x = plot.xrange if x is None else x
+        y = plot.yrange if y is None else y
+    xb = _interval((-6, 6) if x is None else x, 'x')
+    yb = _interval((-6, 6) if y is None else y, 'y')
     if not isinstance(samples, int) or not 20 <= samples <= 1000:
         raise ValueError('samples must be an integer between 20 and 1000')
     params = _parameters(expression.free_symbols - {vx, vy})
-    fun = sp.lambdify([vx, vy, *params], expression, modules='numpy')
+    fun = sp.lambdify((vx, vy, *params), expression, 'numpy', docstring_limit=0)
     gx, gy = np.linspace(*map(float, xb), samples), np.linspace(*map(float, yb), samples)
-    xx, yy = np.meshgrid(gx, gy)
+    xx, yy = np.meshgrid(gx, gy, copy=False)
 
-    def evaluate(values):
+    def evaluate(*args):
         with np.errstate(all='ignore'):
-            z = _array(fun(xx, yy, *[values[str(p)] for p in params]), xx.shape)
+            z = _array(fun(xx, yy, *args), xx.shape)
         return dict(x=gx, y=gy, z=z)
 
-    trace = go.Contour(contours=dict(start=0, end=0, size=1, coloring='none'),
-                       autocontour=False, showscale=False, hoverinfo='skip',
-                       line=dict(color=color, width=line_width),
-                       name=name, showlegend=name is not None)
+    trace = dict(type='contour', contours=dict(start=0, end=0, size=1, coloring='none'),
+                 autocontour=False, showscale=False, hoverinfo='skip',
+                 line=dict(color=color, width=line_width),
+                 name=name, showlegend=name is not None)
     return _submit(_Layer(trace, evaluate, params), show=show)
 
 
-def ListPlot(x, y, *, color='cyan', points=10, lines=False, line_width=2,
+def ListPlot(x, y, *, color='cyan', points=10, lines=False, line_width=2, dash=None,
              text=None, text_size=16, name=None, show=True):
     """Plot coordinate lists, with optional text at the same live positions.
 
     Set ``points=0`` with ``text`` to draw labels without markers.
-    Coordinates may include symbolic slider expressions.
+    Coordinates may include slider expressions and NaN gaps between lines.
     """
     xs, ys = tuple(map(sp.sympify, x)), tuple(map(sp.sympify, y))
     if len(xs) != len(ys) or not xs:
         raise ValueError('ListPlot needs equally sized, nonempty coordinate lists')
     params = _parameters(set().union(*(v.free_symbols for v in (*xs, *ys))))
-    fun = sp.lambdify(params, (xs, ys), modules='numpy')
+    fun = sp.lambdify(params, (xs, ys), 'numpy', cse=True, docstring_limit=0)
+    shape = (len(xs),)
 
-    def evaluate(values):
-        px, py = fun(*[values[str(p)] for p in params])
-        return dict(x=_array(px, (len(xs),)), y=_array(py, (len(ys),)))
+    def evaluate(*args):
+        px, py = fun(*args)
+        return dict(x=_array(px, shape), y=_array(py, shape))
 
     mode = 'lines+markers' if lines and points else 'lines' if lines else 'markers'
     if text is not None:
         mode = (mode + '+text') if lines or points else 'text'
-    trace = go.Scatter(mode=mode, marker=dict(color=color, size=points),
-                       line=dict(color=color, width=line_width),
-                       text=text, textfont=dict(color=color, size=text_size),
-                       name=name, showlegend=name is not None)
+    trace = dict(type='scatter', mode=mode, marker=dict(color=color, size=points),
+                 line=dict(color=color, width=line_width, dash=dash),
+                 text=text, textfont=dict(color=color, size=text_size),
+                 name=name, showlegend=name is not None)
     return _submit(_Layer(trace, evaluate, params), show=show)
